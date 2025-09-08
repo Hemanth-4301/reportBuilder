@@ -1,8 +1,16 @@
-const express = require('express');
-const { generateReport } = require('../controllers/reportsController');
+const express = require("express");
+const { generateReport } = require("../controllers/reportsController");
 
-const router = express.Router();
+module.exports = (models) => {
+  const router = express.Router();
 
-router.post('/generate-report', generateReport);
+  router.post("/generate-report", async (req, res, next) => {
+    try {
+      await generateReport(models)(req, res, next);
+    } catch (error) {
+      next(error); // Pass errors to Express error handling middleware
+    }
+  });
 
-module.exports = router;
+  return router;
+};

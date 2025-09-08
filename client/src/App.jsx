@@ -61,7 +61,7 @@ function App() {
           setCollections(result.collections)
         }
       } catch (error) {
-        console.error('Failed to load collections:', error)
+        console.error('Failed to load tables:', error)
       } finally {
         setLoading(false)
       }

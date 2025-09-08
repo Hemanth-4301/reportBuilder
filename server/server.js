@@ -1,5 +1,5 @@
 const express = require("express");
-const mongoose = require("mongoose");
+const { Sequelize } = require("sequelize");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
@@ -8,6 +8,18 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Setting up Sequelize for MySQL
+const sequelize = new Sequelize(
+  process.env.MYSQL_DATABASE || "manufacturing_reports",
+  process.env.MYSQL_USER || "root",
+  process.env.MYSQL_PASSWORD || "",
+  {
+    host: process.env.MYSQL_HOST || "localhost",
+    dialect: "mysql",
+    logging: false,
+  }
+);
 
 // Security middleware
 app.use(helmet());
@@ -26,31 +38,36 @@ app.set("trust proxy", 1);
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// MongoDB connection
-mongoose
-  .connect(
-    process.env.MONGODB_URI ||
-      "mongodb://127.0.0.1:27017/manufacturing_reports",
-    {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    }
-  )
-  .then(() => console.log("✅ Connected to MongoDB"))
-  .catch((err) => console.error("❌ MongoDB connection error:", err));
+// Initialize Sequelize models
+const initModels = require("./models/init-models");
+const models = initModels(sequelize);
+
+// Sync database
+sequelize
+  .sync({ force: false })
+  .then(() => console.log("✅ Connected to MySQL"))
+  .catch((err) => console.error("❌ MySQL connection error:", err));
 
 // Routes
-app.use("/api/database", require("./routes/database"));
-app.use("/api/reports", require("./routes/reports"));
+app.use("/api/database", require("./routes/database")(models));
+app.use("/api/reports", require("./routes/reports")(models));
 
 // Health check endpoint
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "OK",
-    timestamp: new Date().toISOString(),
-    mongodb:
-      mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
-  });
+app.get("/api/health", async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    res.json({
+      status: "OK",
+      timestamp: new Date().toISOString(),
+      mysql: "Connected",
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "ERROR",
+      timestamp: new Date().toISOString(),
+      mysql: "Disconnected",
+    });
+  }
 });
 
 // Error handling middleware

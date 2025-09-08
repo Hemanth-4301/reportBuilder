@@ -1,10 +1,16 @@
-const express = require('express');
-const { getCollections, getCollectionData, testConnection } = require('../controllers/databaseController');
+const express = require("express");
+const {
+  getCollections,
+  getCollectionData,
+  testConnection,
+} = require("../controllers/databaseController");
 
-const router = express.Router();
+module.exports = (models) => {
+  const router = express.Router();
 
-router.post('/connect-db', testConnection);
-router.get('/collections', getCollections);
-router.get('/collections/:collectionName/:limit?', getCollectionData);
+  router.post("/connect-db", testConnection(models));
+  router.get("/collections", getCollections(models));
+  router.get("/collections/:collectionName/:limit?", getCollectionData(models));
 
-module.exports = router;
+  return router;
+};

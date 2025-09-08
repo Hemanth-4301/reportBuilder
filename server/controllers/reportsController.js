@@ -1,299 +1,158 @@
-const Production = require("../models/Production");
-const Defects = require("../models/Defects");
-const Sales = require("../models/Sales");
-const Joi = require("joi");
+const { Op } = require("sequelize");
 
 const collections = {
-  production: Production,
-  defects: Defects,
-  sales: Sales,
+  production: "Production",
+  defects: "Defects",
+  sales: "Sales",
 };
 
-const generateReport = async (req, res) => {
+const generateReport = (models) => async (req, res, next) => {
   try {
     const { dataModel, visualization, filters } = req.body;
 
-    // Validate request
-    const schema = Joi.object({
-      dataModel: Joi.object({
-        collections: Joi.array().items(Joi.string()).required(),
-        fields: Joi.array().items(Joi.string()).required(),
-        joins: Joi.array().optional(),
-        aggregations: Joi.array().optional(),
-      }).required(),
-      visualization: Joi.object({
-        type: Joi.string()
-          .valid("table", "bar", "line", "pie", "doughnut")
-          .required(),
-        xAxis: Joi.string().when("type", {
-          is: Joi.string().valid("bar", "line", "pie", "doughnut"),
-          then: Joi.string().required(),
-          otherwise: Joi.string().optional(),
-        }),
-        yAxis: Joi.string().when("type", {
-          is: Joi.string().valid("bar", "line", "pie", "doughnut"),
-          then: Joi.string().required(),
-          otherwise: Joi.string().optional(),
-        }),
-      }).required(),
-      filters: Joi.object({
-        dateRange: Joi.object({
-          start: Joi.string().allow("").optional(),
-          end: Joi.string().allow("").optional(),
-        }).optional(),
-        factory: Joi.string().allow("").optional(),
-        region: Joi.string().allow("").optional(),
-        productId: Joi.string().allow("").optional(),
-      }).optional(),
-    });
-
-    const { error } = schema.validate(req.body);
-    if (error) {
+    if (!dataModel || !visualization) {
       return res.status(400).json({
         success: false,
-        error: error.details[0].message,
+        error: "Data model and visualization settings are required",
       });
     }
 
-    let result;
+    const {
+      collections: selectedCollections,
+      fields,
+      aggregations,
+    } = dataModel;
 
-    if (dataModel.collections.length === 1) {
-      result = await querySingleCollection(dataModel, filters || {});
+    if (!selectedCollections.length || !fields.length) {
+      return res.status(400).json({
+        success: false,
+        error: "At least one collection and one field must be selected",
+      });
+    }
+
+    // Build the Sequelize query
+    let queryOptions = {
+      attributes: fields,
+      where: {},
+      raw: true,
+    };
+
+    // Apply filters
+    if (filters) {
+      if (filters.dateRange?.start && filters.dateRange?.end) {
+        queryOptions.where.date = {
+          [Op.between]: [
+            new Date(filters.dateRange.start),
+            new Date(filters.dateRange.end),
+          ],
+        };
+      }
+      if (filters.factory) {
+        queryOptions.where.factory = { [Op.eq]: filters.factory };
+      }
+      if (filters.region) {
+        queryOptions.where.region = { [Op.eq]: filters.region };
+      }
+      if (filters.productId) {
+        queryOptions.where.productId = { [Op.eq]: filters.productId };
+      }
+    }
+
+    // Apply aggregations
+    if (aggregations?.length) {
+      queryOptions.attributes = [];
+      aggregations.forEach((agg) => {
+        let sequelizeAgg;
+        switch (agg.type) {
+          case "sum":
+            sequelizeAgg = [
+              [
+                models.sequelize.fn("SUM", models.sequelize.col(agg.field)),
+                agg.field,
+              ],
+            ];
+            break;
+          case "count":
+            sequelizeAgg = [
+              [
+                models.sequelize.fn("COUNT", models.sequelize.col(agg.field)),
+                agg.field,
+              ],
+            ];
+            break;
+          case "average":
+            sequelizeAgg = [
+              [
+                models.sequelize.fn("AVG", models.sequelize.col(agg.field)),
+                agg.field,
+              ],
+            ];
+            break;
+          default:
+            throw new Error(`Unsupported aggregation type: ${agg.type}`);
+        }
+        queryOptions.attributes.push(...sequelizeAgg);
+        if (agg.groupBy) {
+          queryOptions.group = [agg.groupBy];
+        }
+      });
+    }
+
+    // Handle joins if multiple collections are selected
+    let data;
+    if (selectedCollections.length === 1) {
+      const model = models[collections[selectedCollections[0]]];
+      data = await model.findAll(queryOptions);
     } else {
-      result = await queryMultipleCollections(dataModel, filters || {});
+      // Example join logic (adjust based on your schema relationships)
+      const primaryModel = models[collections[selectedCollections[0]]];
+      queryOptions.include = selectedCollections.slice(1).map((col) => ({
+        model: models[collections[col]],
+        required: false, // LEFT JOIN
+      }));
+      data = await primaryModel.findAll(queryOptions);
     }
 
-    if (dataModel.aggregations && dataModel.aggregations.length > 0) {
-      result = await applyAggregations(result, dataModel.aggregations);
-    }
+    // Format data for visualization
+    let reportData;
+    if (visualization.type === "table") {
+      reportData = {
+        columns: fields,
+        rows: data,
+      };
+    } else {
+      const labels = data.map((row) => row[visualization.xAxis] || "Unknown");
+      const datasets = [
+        {
+          label: visualization.yAxis,
+          data: data.map((row) => row[visualization.yAxis] || 0),
+          backgroundColor: ["#3b82f6", "#10b981", "#8b5cf6", "#f43f5e"],
+          borderColor: ["#2563eb", "#059669", "#7c3aed", "#e11d48"],
+          borderWidth: 1,
+        },
+      ];
 
-    const formattedData = formatDataForVisualization(result, visualization);
+      reportData = {
+        labels,
+        datasets,
+      };
+    }
 
     res.json({
       success: true,
-      data: formattedData,
+      data: reportData,
       metadata: {
-        totalRecords: result.length,
-        collections: dataModel.collections,
-        visualization: visualization.type,
+        totalRecords: data.length,
+        timestamp: new Date().toISOString(),
       },
     });
   } catch (error) {
-    console.error("Error generating report:", error);
+    console.error("Report generation error:", error);
     res.status(500).json({
       success: false,
-      error: "Failed to generate report",
+      error: error.message || "Failed to generate report",
     });
   }
 };
 
-const querySingleCollection = async (dataModel, filters) => {
-  const collectionName = dataModel.collections[0];
-  const Model = collections[collectionName];
-
-  if (!Model) {
-    throw new Error(`Collection ${collectionName} not found`);
-  }
-
-  let query = Model.find();
-
-  if (filters.dateRange?.start || filters.dateRange?.end) {
-    const dateFilter = {};
-    if (filters.dateRange.start)
-      dateFilter.$gte = new Date(filters.dateRange.start);
-    if (filters.dateRange.end)
-      dateFilter.$lte = new Date(filters.dateRange.end);
-    if (Object.keys(dateFilter).length > 0) {
-      query = query.where("date").setOptions({ dateFilter });
-    }
-  }
-
-  if (filters.factory) {
-    query = query.where("factory").equals(filters.factory);
-  }
-
-  if (filters.region) {
-    query = query.where("region").equals(filters.region);
-  }
-
-  if (filters.productId) {
-    query = query.where("productId").equals(filters.productId);
-  }
-
-  if (dataModel.fields && dataModel.fields.length > 0) {
-    const selectFields = dataModel.fields.join(" ");
-    query = query.select(selectFields);
-  }
-
-  return await query.lean();
-};
-
-const queryMultipleCollections = async (dataModel, filters) => {
-  const primaryCollection = dataModel.collections[0];
-  const Model = collections[primaryCollection];
-
-  if (!Model) {
-    throw new Error(`Primary collection ${primaryCollection} not found`);
-  }
-
-  const pipeline = [];
-
-  const matchStage = {};
-  if (filters.dateRange?.start || filters.dateRange?.end) {
-    matchStage.date = {};
-    if (filters.dateRange.start)
-      matchStage.date.$gte = new Date(filters.dateRange.start);
-    if (filters.dateRange.end)
-      matchStage.date.$lte = new Date(filters.dateRange.end);
-  }
-  if (filters.factory) matchStage.factory = filters.factory;
-  if (filters.region) matchStage.region = filters.region;
-  if (filters.productId) matchStage.productId = filters.productId;
-
-  if (Object.keys(matchStage).length > 0) {
-    pipeline.push({ $match: matchStage });
-  }
-
-  for (let i = 1; i < dataModel.collections.length; i++) {
-    const joinCollection = dataModel.collections[i];
-    pipeline.push({
-      $lookup: {
-        from: joinCollection,
-        localField: "productId",
-        foreignField: "productId",
-        as: joinCollection,
-      },
-    });
-  }
-
-  if (dataModel.fields && dataModel.fields.length > 0) {
-    const projectStage = {};
-    dataModel.fields.forEach((field) => {
-      projectStage[field] = 1;
-    });
-    pipeline.push({ $project: projectStage });
-  }
-
-  return await Model.aggregate(pipeline);
-};
-
-const applyAggregations = async (data, aggregations) => {
-  let result = [...data];
-
-  for (const agg of aggregations) {
-    switch (agg.type) {
-      case "sum":
-        if (agg.field && agg.groupBy) {
-          result = groupAndSum(result, agg.groupBy, agg.field);
-        }
-        break;
-      case "count":
-        if (agg.groupBy) {
-          result = groupAndCount(result, agg.groupBy);
-        }
-        break;
-      case "average":
-        if (agg.field && agg.groupBy) {
-          result = groupAndAverage(result, agg.groupBy, agg.field);
-        }
-        break;
-    }
-  }
-
-  return result;
-};
-
-const groupAndSum = (data, groupBy, sumField) => {
-  const grouped = data.reduce((acc, item) => {
-    const key = item[groupBy];
-    if (!acc[key]) {
-      acc[key] = { [groupBy]: key, [sumField]: 0, count: 0 };
-    }
-    acc[key][sumField] += item[sumField] || 0;
-    acc[key].count += 1;
-    return acc;
-  }, {});
-
-  return Object.values(grouped);
-};
-
-const groupAndCount = (data, groupBy) => {
-  const grouped = data.reduce((acc, item) => {
-    const key = item[groupBy];
-    if (!acc[key]) {
-      acc[key] = { [groupBy]: key, count: 0 };
-    }
-    acc[key].count += 1;
-    return acc;
-  }, {});
-
-  return Object.values(grouped);
-};
-
-const groupAndAverage = (data, groupBy, avgField) => {
-  const grouped = groupAndSum(data, groupBy, avgField);
-  return grouped.map((item) => ({
-    ...item,
-    [avgField]: item.count > 0 ? item[avgField] / item.count : 0,
-  }));
-};
-
-const formatDataForVisualization = (data, visualization) => {
-  if (!data || data.length === 0) {
-    return { labels: [], datasets: [] };
-  }
-
-  switch (visualization.type) {
-    case "table":
-      return {
-        columns: Object.keys(data[0]),
-        rows: data,
-      };
-
-    case "bar":
-    case "line":
-      return {
-        labels: data.map((item) => item[visualization.xAxis] || item._id),
-        datasets: [
-          {
-            label: visualization.yAxis || "Value",
-            data: data.map((item) => item[visualization.yAxis] || 0),
-            backgroundColor:
-              visualization.type === "bar"
-                ? "rgba(59, 130, 246, 0.8)"
-                : "rgba(59, 130, 246, 0.2)",
-            borderColor: "rgba(59, 130, 246, 1)",
-            borderWidth: 2,
-          },
-        ],
-      };
-
-    case "pie":
-    case "doughnut":
-      const colors = [
-        "rgba(59, 130, 246, 0.8)",
-        "rgba(16, 185, 129, 0.8)",
-        "rgba(245, 101, 101, 0.8)",
-        "rgba(251, 191, 36, 0.8)",
-        "rgba(139, 92, 246, 0.8)",
-      ];
-
-      return {
-        labels: data.map((item) => item[visualization.xAxis] || item._id),
-        datasets: [
-          {
-            data: data.map((item) => item[visualization.yAxis] || 0),
-            backgroundColor: colors.slice(0, data.length),
-            borderWidth: 1,
-          },
-        ],
-      };
-
-    default:
-      return data;
-  }
-};
-
-module.exports = {
-  generateReport,
-};
+module.exports = { generateReport };
