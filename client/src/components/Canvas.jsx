@@ -10,7 +10,7 @@ import {
   Sparkles,
   Filter,
   BarChart3,
-  Table,
+  Table as TableIcon,
   PieChart,
   LineChart,
   Target,
@@ -58,6 +58,12 @@ const Canvas = ({
       label: "Pie Chart",
       icon: PieChart,
       color: "text-purple-600",
+    },
+    {
+      type: "table",
+      label: "Table",
+      icon: TableIcon,
+      color: "text-gray-600",
     },
   ];
 

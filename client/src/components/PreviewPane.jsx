@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FileText,
@@ -24,7 +24,7 @@ import {
   Tooltip,
   Legend,
 } from "chart.js";
-import { Line, Bar, Pie, Doughnut } from "react-chartjs-2";
+import { Line, Bar, Pie } from "react-chartjs-2";
 import { exportService } from "../services/exportService";
 
 ChartJS.register(
@@ -44,6 +44,12 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
   const [showPreview, setShowPreview] = useState(true);
   const [exporting, setExporting] = useState(false);
 
+  // Debugging: Log reportData and visualization type
+  useEffect(() => {
+    console.log("Report Data:", reportData);
+    console.log("Visualization Type:", visualization.type);
+  }, [reportData, visualization]);
+
   const handleExport = async (format) => {
     if (!reportData) {
       toast.error("No data to export");
@@ -57,16 +63,22 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
           await exportService.exportToPDF(reportData, visualization, dataModel);
           toast.success("PDF exported successfully!");
           break;
-        case "csv":
-          await exportService.exportToCSV(
+        case "excel":
+          await exportService.exportToExcel(
             reportData,
             `manufacturing_report_${Date.now()}`
           );
-          toast.success("CSV exported successfully!");
+          toast.success("Excel exported successfully!");
           break;
         case "image":
+          // Debug: Log table DOM state before export
+          const table = document.querySelector("#chart-container table");
+          console.log(
+            "Table DOM before PNG export:",
+            table?.outerHTML || "No table found"
+          );
           await exportService.exportToImage("chart-container");
-          toast.success("Chart image exported successfully!");
+          toast.success("Image exported successfully!");
           break;
         default:
           toast.error("Unsupported export format");
@@ -80,7 +92,17 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
   };
 
   const renderChart = () => {
-    if (!reportData || !reportData.labels) {
+    // Check for table visualization first
+    if (
+      visualization.type === "table" &&
+      reportData?.rows &&
+      reportData?.columns
+    ) {
+      return renderTable();
+    }
+
+    // Check for chart data
+    if (!reportData || !reportData.labels || !reportData.datasets) {
       return (
         <div className="flex items-center justify-center h-64 md:h-80 lg:h-96 text-slate-500 dark:text-slate-400">
           <div className="text-center">
@@ -120,26 +142,29 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
           ? {
               x: {
                 grid: {
-                  color: "rgba(148, 163, 184, 0.1)",
+                  color: "rgba(0, 0, 0, 0.1)", // Black grid lines for contrast on gray
                 },
                 ticks: {
                   font: {
                     size: window.innerWidth < 640 ? 9 : 11,
                   },
+                  color: "#1f2937", // Dark gray ticks for contrast
                 },
               },
               y: {
                 grid: {
-                  color: "rgba(148, 163, 184, 0.1)",
+                  color: "rgba(0, 0, 0, 0.1)", // Black grid lines for contrast
                 },
                 ticks: {
                   font: {
                     size: window.innerWidth < 640 ? 9 : 11,
                   },
+                  color: "#1f2937", // Dark gray ticks for contrast
                 },
               },
             }
           : undefined,
+      backgroundColor: "#e5e7eb", // Set gray background for charts
     };
 
     switch (visualization.type) {
@@ -149,17 +174,17 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
         return <Line data={reportData} options={chartOptions} />;
       case "pie":
         return <Pie data={reportData} options={chartOptions} />;
-      case "doughnut":
-        return <Doughnut data={reportData} options={chartOptions} />;
-      case "table":
-        return renderTable();
       default:
-        return renderTable();
+        return (
+          <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+            <p className="text-sm md:text-base">Invalid visualization type</p>
+          </div>
+        );
     }
   };
 
   const renderTable = () => {
-    if (!reportData || !reportData.rows) {
+    if (!reportData || !reportData.rows || !reportData.columns) {
       return (
         <div className="text-center py-8 text-slate-500 dark:text-slate-400">
           <p className="text-sm md:text-base">No table data available</p>
@@ -168,14 +193,21 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
     }
 
     return (
-      <div className="overflow-x-auto max-h-[60vh] sm:max-h-[70vh] lg:max-h-96 scrollbar-thin">
-        <table className="w-full text-xs sm:text-sm">
+      <div
+        className="overflow-x-auto max-h-[60vh] sm:max-h-[70vh] lg:max-h-96 scrollbar-thin"
+        style={{ minHeight: "200px", position: "relative" }}
+      >
+        <table
+          className="w-full text-xs sm:text-sm border-collapse table-auto bg-white dark:bg-slate-900"
+          style={{ visibility: "visible", opacity: 1 }}
+        >
           <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0 z-10">
             <tr>
-              {reportData.columns?.map((column, index) => (
+              {reportData.columns.map((column, index) => (
                 <th
                   key={index}
-                  className="px-2 sm:px-4 py-2 sm:py-3 text-left font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-600 whitespace-nowrap"
+                  className="px-4 py-3 text-left font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-600 whitespace-nowrap"
+                  style={{ backgroundColor: "inherit" }}
                 >
                   {column}
                 </th>
@@ -183,15 +215,16 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
             </tr>
           </thead>
           <tbody>
-            {reportData.rows?.map((row, rowIndex) => (
+            {reportData.rows.map((row, rowIndex) => (
               <tr
                 key={rowIndex}
                 className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
               >
-                {reportData.columns?.map((column, colIndex) => (
+                {reportData.columns.map((column, colIndex) => (
                   <td
                     key={colIndex}
-                    className="px-2 sm:px-4 py-2 sm:py-3 border-b border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100 whitespace-nowrap"
+                    className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100 whitespace-nowrap"
+                    style={{ color: "inherit" }}
                   >
                     {row[column] !== undefined ? String(row[column]) : "-"}
                   </td>
@@ -221,8 +254,9 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
               Report Preview
             </h3>
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 truncate">
-              {visualization.type} •{" "}
-              {dataModel.collections?.join(", ") || "No data"}
+              {visualization.type.charAt(0).toUpperCase() +
+                visualization.type.slice(1)}{" "}
+              • {dataModel.collections?.join(", ") || "No data"}
             </p>
           </div>
         </div>
@@ -263,6 +297,12 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
               <div
                 id="chart-container"
                 className="h-[40vh] sm:h-[50vh] lg:h-[60vh] w-full"
+                style={{
+                  position: "relative",
+                  overflow: "visible",
+                  backgroundColor:
+                    visualization.type === "table" ? "#ffffff" : "#e5e7eb",
+                }}
               >
                 {renderChart()}
               </div>
@@ -285,23 +325,21 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
                       <span className="hidden sm:inline">PDF</span>
                     </button>
                     <button
-                      onClick={() => handleExport("csv")}
+                      onClick={() => handleExport("excel")}
                       disabled={exporting}
                       className="flex items-center space-x-1 sm:space-x-2 px-2 sm:px-3 py-1.5 sm:py-2 bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-200 dark:hover:bg-green-900/30 transition-colors disabled:opacity-50 text-xs sm:text-sm"
                     >
                       <FileSpreadsheet className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                      <span className="hidden sm:inline">CSV</span>
+                      <span className="hidden sm:inline">Excel</span>
                     </button>
-                    {visualization.type !== "table" && (
-                      <button
-                        onClick={() => handleExport("image")}
-                        disabled={exporting}
-                        className="flex items-center space-x-1 sm:space-x-2 px-2 sm:px-3 py-1.5 sm:py-2 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-50 text-xs sm:text-sm"
-                      >
-                        <ImageIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                        <span className="hidden sm:inline">PNG</span>
-                      </button>
-                    )}
+                    <button
+                      onClick={() => handleExport("image")}
+                      disabled={exporting}
+                      className="flex items-center space-x-1 sm:space-x-2 px-2 sm:px-3 py-1.5 sm:py-2 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-50 text-xs sm:text-sm"
+                    >
+                      <ImageIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      <span className="hidden sm:inline">PNG</span>
+                    </button>
                   </div>
                 </div>
               </div>
