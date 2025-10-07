@@ -1,4 +1,4 @@
-﻿const { Op } = require("sequelize");
+const { Op } = require("sequelize");
 const analyticsService = require('../utils/analyticsService');
 
 const collections = {
@@ -32,6 +32,103 @@ const FIELD_TABLE_MAP = {
   customerId: ['sales'],
   salesRep: ['sales'],
   channel: ['sales']
+};
+
+// Table relationship mapping for intelligent joins
+const TABLE_RELATIONSHIPS = {
+  production: {
+    canJoinWith: ['defects', 'sales'],
+    commonFields: {
+      defects: ['productId', 'factory', 'date'],
+      sales: ['productId', 'date']
+    }
+  },
+  defects: {
+    canJoinWith: ['production', 'sales'],
+    commonFields: {
+      production: ['productId', 'factory', 'date'],
+      sales: ['productId', 'date']
+    }
+  },
+  sales: {
+    canJoinWith: ['production', 'defects'],
+    commonFields: {
+      production: ['productId', 'date'],
+      defects: ['productId', 'date']
+    }
+  }
+};
+
+// Helper function to validate field selections against available tables
+const validateFieldSelections = (selectedCollections, selectedFields) => {
+  const errors = [];
+  const warnings = [];
+  const fieldTableMap = new Map(); // Track which fields belong to which tables
+  
+  // Validate each field
+  selectedFields.forEach(field => {
+    const availableTables = FIELD_TABLE_MAP[field];
+    
+    if (!availableTables) {
+      errors.push(`Unknown field: ${field}`);
+      return;
+    }
+    
+    // Check if field is available in any of the selected collections
+    const compatibleTables = availableTables.filter(table => 
+      selectedCollections.includes(table)
+    );
+    
+    if (compatibleTables.length === 0) {
+      errors.push(`Field '${field}' is not available in any of the selected tables: ${selectedCollections.join(', ')}`);
+      return;
+    }
+    
+    // Map field to its compatible tables
+    fieldTableMap.set(field, compatibleTables);
+    
+    if (compatibleTables.length > 1) {
+      warnings.push(`Field '${field}' exists in multiple selected tables: ${compatibleTables.join(', ')}. Will use from primary table.`);
+    }
+  });
+  
+  return {
+    isValid: errors.length === 0,
+    errors,
+    warnings,
+    fieldTableMap
+  };
+};
+
+// Helper function to validate table joins
+const validateTableJoins = (selectedCollections, selectedFields) => {
+  const errors = [];
+  const warnings = [];
+  
+  if (selectedCollections.length < 2) {
+    return { isValid: true, errors, warnings };
+  }
+
+  // Check if all tables can be joined
+  for (let i = 0; i < selectedCollections.length; i++) {
+    const table1 = selectedCollections[i];
+    const table1Relationships = TABLE_RELATIONSHIPS[table1];
+    
+    if (!table1Relationships) {
+      errors.push(`Unknown table: ${table1}`);
+      continue;
+    }
+
+    for (let j = i + 1; j < selectedCollections.length; j++) {
+      const table2 = selectedCollections[j];
+      
+      if (!table1Relationships.canJoinWith.includes(table2)) {
+        errors.push(`Cannot join ${table1} with ${table2} - no relationship defined`);
+      }
+    }
+  }
+  
+  return { isValid: errors.length === 0, errors, warnings };
 };
 
 const generateReport = (models) => async (req, res, next) => {
@@ -70,35 +167,30 @@ const generateReport = (models) => async (req, res, next) => {
       });
     }
 
-    // Validate field selections against available tables
-    const errors = [];
-    fields.forEach(field => {
-      const availableTables = FIELD_TABLE_MAP[field];
-      
-      if (!availableTables) {
-        errors.push(`Unknown field: ${field}`);
-        return;
-      }
-      
-      // Check if field is available in any of the selected collections
-      const compatibleTables = availableTables.filter(table => 
-        selectedCollections.includes(table)
-      );
-      
-      if (compatibleTables.length === 0) {
-        errors.push(`Field '${field}' is not available in any of the selected tables: ${selectedCollections.join(', ')}`);
-      }
-    });
-
-    if (errors.length > 0) {
+    // Validate field selections first
+    const fieldValidation = validateFieldSelections(selectedCollections, fields);
+    if (!fieldValidation.isValid) {
       return res.status(400).json({
         success: false,
-        error: `Field validation failed: ${errors.join(', ')}`,
+        error: `Field validation failed: ${fieldValidation.errors.join(', ')}`,
         details: {
-          errors: errors,
+          errors: fieldValidation.errors,
+          warnings: fieldValidation.warnings,
           suggestion: "Please check your field selections and try again"
         }
       });
+    }
+
+    // Validate multi-table joins
+    if (selectedCollections.length > 1) {
+      const joinValidation = validateTableJoins(selectedCollections, fields);
+      if (!joinValidation.isValid) {
+        return res.status(400).json({
+          success: false,
+          error: `Join validation failed: ${joinValidation.errors.join(', ')}`,
+          details: joinValidation.errors
+        });
+      }
     }
 
     // Build the Sequelize query
@@ -127,6 +219,46 @@ const generateReport = (models) => async (req, res, next) => {
       if (filters.productId) {
         queryOptions.where.productId = { [Op.eq]: filters.productId };
       }
+    }
+
+    // Apply aggregations
+    if (aggregations?.length) {
+      queryOptions.attributes = [];
+      aggregations.forEach((agg) => {
+        let sequelizeAgg;
+        switch (agg.type) {
+          case "sum":
+            sequelizeAgg = [
+              [
+                models.sequelize.fn("SUM", models.sequelize.col(agg.field)),
+                agg.field,
+              ],
+            ];
+            break;
+          case "count":
+            sequelizeAgg = [
+              [
+                models.sequelize.fn("COUNT", models.sequelize.col(agg.field)),
+                agg.field,
+              ],
+            ];
+            break;
+          case "average":
+            sequelizeAgg = [
+              [
+                models.sequelize.fn("AVG", models.sequelize.col(agg.field)),
+                agg.field,
+              ],
+            ];
+            break;
+          default:
+            throw new Error(`Unsupported aggregation type: ${agg.type}`);
+        }
+        queryOptions.attributes.push(...sequelizeAgg);
+        if (agg.groupBy) {
+          queryOptions.group = [agg.groupBy];
+        }
+      });
     }
 
     // Handle single table vs multi-table queries
@@ -239,145 +371,21 @@ const generateReport = (models) => async (req, res, next) => {
       }, queryEndTime - queryStartTime, data?.length || 0);
     }
 
-    // Format data for visualization
-    let reportData;
-
-    // Determine x and y fields (use visualization hints if provided)
-    const xField = (visualization && visualization.xAxis) || fields[0];
-    // visualization.yAxis may be a single field or an array; prefer explicit config
-    let yField = null;
-    if (visualization && visualization.yAxis) {
-      yField = Array.isArray(visualization.yAxis) ? visualization.yAxis[0] : visualization.yAxis;
-    } else if (fields.length > 1) {
-      yField = fields[1];
-    } else {
-      // Try to infer a numeric field from the data
-      for (const f of fields) {
-        if (data.some(r => typeof r[f] === 'number')) {
-          yField = f;
-          break;
-        }
-      }
-      // Fallback to first field if nothing numeric found (will result in zeros)
-      if (!yField) yField = fields[0];
-    }
-
-  // Diagnostic container
-  const debugInfo = {};
-
-  // Table visualization just returns rows and fields
-    if (visualization.type === 'table') {
-      reportData = {
-        type: 'table',
-        data: data,
-        fields: fields,
-        totalRecords: data.length
-      };
-    } else if (visualization.type === 'multi-bar' && selectedCollections.length > 1) {
-      // Multi-bar across tables: build common labels (unique x values) and align datasets
-      const groupedByTable = {};
-      const labels = [];
-      const seen = new Set();
-
-      // Group rows and build unique labels in encounter order
-      data.forEach(row => {
-        const table = row._sourceTable || 'unknown';
-        if (!groupedByTable[table]) groupedByTable[table] = [];
-        groupedByTable[table].push(row);
-
-        const lab = row[xField] !== undefined && row[xField] !== null ? String(row[xField]) : 'N/A';
-        if (!seen.has(lab)) {
-          seen.add(lab);
-          labels.push(lab);
-        }
-      });
-
-      // Keep a reasonable max length
-      const finalLabels = labels.slice(0, 50);
-
-      const datasets = Object.keys(groupedByTable).map((tableName, index) => {
-        const tableData = groupedByTable[tableName];
-
-        // Determine the best Y field for this table (prefer explicit visualization.valueFields)
-        const tableYField = (visualization && visualization.valueFields && visualization.valueFields.find(f => FIELD_TABLE_MAP[f] && FIELD_TABLE_MAP[f].includes(tableName)))
-          || fields.find(f => FIELD_TABLE_MAP[f] && FIELD_TABLE_MAP[f].includes(tableName) && tableData.some(r => r[f] !== undefined && r[f] !== null))
-          || fields.find(f => FIELD_TABLE_MAP[f] && FIELD_TABLE_MAP[f].includes(tableName));
-
-        // Attach debug info for diagnostics (returned to caller)
-        debugInfo[tableName] = {
-          chosenYField: tableYField,
-          sampleRow: tableData.length > 0 ? tableData[0] : null
-        };
-
-        const values = finalLabels.map(label => {
-          const match = tableData.find(r => String(r[xField]) === label);
-          if (!match) return 0;
-          const val = tableYField ? match[tableYField] : undefined;
-          return typeof val === 'number' ? val : (parseFloat(val) || 0);
-        });
-
-        return {
-          label: tableName.charAt(0).toUpperCase() + tableName.slice(1),
-          data: values,
-          backgroundColor: `hsla(${index * 80}, 70%, 50%, 0.8)`,
-          borderColor: `hsla(${index * 80}, 70%, 40%, 1)`,
-          borderWidth: 1
-        };
-      });
-
-      reportData = {
-        type: 'multi-bar',
-        data: {
-          labels,
-          datasets
-        },
-        totalRecords: data.length,
-        tableCount: selectedCollections.length
-      };
-    } else {
-      // Standard single chart (bar/line/pie etc.) - single dataset representing yField
-      const labels = data.map(row => String(row[xField] || 'N/A')).slice(0, 50);
-      const values = data.map(row => {
-        const v = row[yField];
-        return typeof v === 'number' ? v : (parseFloat(v) || 0);
-      }).slice(0, 50);
-
-      reportData = {
-        type: visualization.type,
-        data: {
-          labels,
-          datasets: [{
-            label: yField || fields[0],
-            data: values,
-            backgroundColor: visualization.type === 'pie' ?
-              values.map((_, i) => `hsla(${i * 36}, 70%, 50%, 0.8)`) :
-              'rgba(54, 162, 235, 0.6)',
-            borderColor: visualization.type === 'pie' ?
-              values.map((_, i) => `hsla(${i * 36}, 70%, 40%, 1)`) :
-              'rgba(54, 162, 235, 1)',
-            borderWidth: 1
-          }]
-        },
-        totalRecords: data.length
-      };
-    }
-
+    // Format data for visualization based on visualization type
     const totalExecutionTime = Date.now() - startTime;
-
+    
+    // Return successful response
     res.json({
       success: true,
-      data: reportData,
+      data: data || [],
       metadata: {
-        executionTime: totalExecutionTime,
-        recordCount: data.length,
-        totalRecords: reportData?.totalRecords ?? data.length,
+        totalRecords: data?.length || 0,
         collections: selectedCollections,
-        joinType: selectedCollections.length > 1 ? 'multi-table' : 'single-table',
         fields: fields,
-        visualization: visualization.type,
+        visualizationType: visualization.type,
         executionTime: totalExecutionTime,
-        debugInfo
-      },
+        sessionId: sessionId
+      }
     });
   } catch (error) {
     console.error("Report generation error:", error);

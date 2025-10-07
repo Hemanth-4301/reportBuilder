@@ -78,17 +78,32 @@ export const exportService = {
         // Chart export
         const chartElement = document.getElementById("chart-container");
         if (chartElement) {
-          const canvas = await html2canvas(chartElement, {
-            backgroundColor: "#e5e7eb", // Match chart gray background
-            scale: 2,
-            useCORS: true,
-            allowTaint: true,
-            logging: true,
-          });
-          const imgData = canvas.toDataURL("image/png");
-          const imgWidth = maxWidth;
-          const imgHeight = (canvas.height * imgWidth) / canvas.width;
-          pdf.addImage(imgData, "PNG", margin, 70, imgWidth, imgHeight);
+          try {
+            const canvas = await html2canvas(chartElement, {
+              backgroundColor: "#e5e7eb",
+              scale: 2,
+              useCORS: true,
+              allowTaint: true,
+              logging: true,
+            });
+            const imgData = canvas.toDataURL("image/png");
+            const imgWidth = maxWidth;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            pdf.addImage(imgData, "PNG", margin, 70, imgWidth, imgHeight);
+          } catch (err) {
+            // Fallback: try to find a canvas element (Chart.js) and use its data
+            console.warn('html2canvas failed, falling back to canvas.toDataURL', err);
+            const innerCanvas = chartElement.querySelector('canvas');
+            if (innerCanvas) {
+              const imgData = innerCanvas.toDataURL('image/png');
+              // approximate dimensions
+              const imgWidth = maxWidth;
+              const imgHeight = (innerCanvas.height * imgWidth) / innerCanvas.width || imgWidth * 0.6;
+              pdf.addImage(imgData, 'PNG', margin, 70, imgWidth, imgHeight);
+            } else {
+              console.warn('No canvas found inside chart-container for fallback export');
+            }
+          }
         }
       }
 
@@ -228,8 +243,25 @@ export const exportService = {
         1.0
       );
     } catch (error) {
-      console.error("Image export error:", error);
-      throw new Error("Failed to export image");
+      console.warn('html2canvas/exportToImage failed, attempting direct canvas grab', error);
+      try {
+        const element = document.getElementById(elementId);
+        const innerCanvas = element && element.querySelector && element.querySelector('canvas');
+        if (innerCanvas) {
+          const dataUrl = innerCanvas.toDataURL('image/png');
+          const link = document.createElement('a');
+          link.href = dataUrl;
+          link.download = `${filename}_${Date.now()}.png`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          return;
+        }
+      } catch (e) {
+        console.error('Direct canvas grab also failed', e);
+      }
+      console.error('Image export error:', error);
+      throw new Error('Failed to export image');
     }
   },
 };
