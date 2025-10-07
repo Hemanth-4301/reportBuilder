@@ -28,7 +28,7 @@ app.use(
     origin:
       process.env.NODE_ENV === "production"
         ? ["https://yourdomain.com"]
-        : ["http://localhost:3000", "http://localhost:5173"],
+        : ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"],
     credentials: true,
   })
 );
@@ -51,6 +51,7 @@ sequelize
 // Routes
 app.use("/api/database", require("./routes/database")(models));
 app.use("/api/reports", require("./routes/reports")(models));
+app.use("/api/analytics", require("./routes/analytics"));
 
 // Health check endpoint
 app.get("/api/health", async (req, res) => {

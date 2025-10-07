@@ -26,6 +26,8 @@ import {
 } from "chart.js";
 import { Line, Bar, Pie } from "react-chartjs-2";
 import { exportService } from "../services/exportService";
+import FieldValidationService from "../services/FieldValidationService";
+import RecommendationEngine from "../services/RecommendationEngine";
 
 ChartJS.register(
   CategoryScale,
@@ -43,12 +45,52 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showPreview, setShowPreview] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [validationSuggestions, setValidationSuggestions] = useState([]);
+  const [performanceAnalysis, setPerformanceAnalysis] = useState(null);
+  const [smartSuggestions, setSmartSuggestions] = useState([]);
 
   // Debugging: Log reportData and visualization type
   useEffect(() => {
     console.log("Report Data:", reportData);
     console.log("Visualization Type:", visualization.type);
   }, [reportData, visualization]);
+
+  // Get validation suggestions and intelligence analysis when there's no data
+  useEffect(() => {
+    if (!reportData && dataModel?.fields?.length > 0) {
+      const selectedFields = dataModel.fields.map(fieldName => ({
+        name: fieldName,
+        type: 'string' // Default type, could be enhanced
+      }));
+      
+      // Get validation suggestions
+      const suggestions = FieldValidationService.getFieldSelectionSuggestions(
+        selectedFields,
+        dataModel.collections || [],
+        visualization.type
+      );
+      setValidationSuggestions(suggestions);
+      
+      // Get performance analysis
+      const performance = RecommendationEngine.analyzePerformance(
+        selectedFields,
+        dataModel.collections || []
+      );
+      setPerformanceAnalysis(performance);
+      
+      // Get smart suggestions
+      const analysis = RecommendationEngine.analyzeFieldSelection(
+        selectedFields,
+        dataModel.collections || [],
+        visualization.type
+      );
+      setSmartSuggestions(analysis.suggestions || []);
+    } else {
+      setValidationSuggestions([]);
+      setPerformanceAnalysis(null);
+      setSmartSuggestions([]);
+    }
+  }, [reportData, dataModel, visualization.type]);
 
   const handleExport = async (format) => {
     if (!reportData) {
@@ -94,9 +136,10 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
   const renderChart = () => {
     // Check for table visualization first
     if (
-      visualization.type === "table" &&
-      reportData?.rows &&
-      reportData?.columns
+      (visualization.type === "table" || visualization.type === "grouped-table") &&
+      reportData &&
+      (reportData.rows || reportData.groups) &&
+      reportData.columns
     ) {
       return renderTable();
     }
@@ -105,12 +148,70 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
     if (!reportData || !reportData.labels || !reportData.datasets) {
       return (
         <div className="flex items-center justify-center h-64 md:h-80 lg:h-96 text-slate-500 dark:text-slate-400">
-          <div className="text-center">
+          <div className="text-center max-w-md mx-auto p-4">
             <RefreshCw className="h-10 w-10 md:h-12 md:w-12 mx-auto mb-3 opacity-50" />
-            <p className="text-sm md:text-base">No data to display</p>
-            <p className="text-xs md:text-sm mt-1">
+            <p className="text-sm md:text-base font-medium mb-2">No data to display</p>
+            <p className="text-xs md:text-sm mb-4">
               Generate a report to see visualization
             </p>
+            
+            {/* Intelligence and Suggestions */}
+            <div className="space-y-3">
+              {/* Performance Analysis */}
+              {performanceAnalysis && (
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg p-3 text-left">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-indigo-900 dark:text-indigo-100">
+                      Performance Preview
+                    </h4>
+                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                      performanceAnalysis.score >= 80 ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' :
+                      performanceAnalysis.score >= 60 ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300' :
+                      'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+                    }`}>
+                      {performanceAnalysis.score}/100
+                    </span>
+                  </div>
+                  <div className="text-xs text-indigo-700 dark:text-indigo-300">
+                    <p>Est. Query Time: <span className="font-medium">{performanceAnalysis.estimatedQueryTime}</span></p>
+                  </div>
+                </div>
+              )}
+
+              {/* Smart Suggestions */}
+              {smartSuggestions.length > 0 && (
+                <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-3 text-left">
+                  <h4 className="text-sm font-medium text-purple-900 dark:text-purple-100 mb-2">
+                    Smart Suggestions:
+                  </h4>
+                  <ul className="space-y-1">
+                    {smartSuggestions.slice(0, 2).map((suggestion, index) => (
+                      <li key={index} className="text-xs text-purple-700 dark:text-purple-300 flex items-start space-x-1">
+                        <span className="text-purple-500 mt-0.5">•</span>
+                        <span>{typeof suggestion === 'string' ? suggestion : suggestion.message || 'Smart suggestion available'}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Validation Suggestions */}
+              {validationSuggestions.length > 0 && (
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-left">
+                  <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-2">
+                    Getting Started:
+                  </h4>
+                  <ul className="space-y-1">
+                    {validationSuggestions.slice(0, 2).map((suggestion, index) => (
+                      <li key={index} className="text-xs text-blue-700 dark:text-blue-300 flex items-start space-x-1">
+                        <span className="text-blue-500 mt-0.5">•</span>
+                        <span>{suggestion.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       );
@@ -138,29 +239,31 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
         },
       },
       scales:
-        visualization.type === "bar" || visualization.type === "line"
+        ["bar", "line", "multi-bar", "comparison-chart"].includes(visualization.type)
           ? {
               x: {
                 grid: {
-                  color: "rgba(0, 0, 0, 0.1)", // Black grid lines for contrast on gray
+                  color: "rgba(0, 0, 0, 0.1)",
                 },
                 ticks: {
                   font: {
                     size: window.innerWidth < 640 ? 9 : 11,
                   },
-                  color: "#1f2937", // Dark gray ticks for contrast
+                  color: "#1f2937",
+                  maxRotation: 45,
                 },
               },
               y: {
                 grid: {
-                  color: "rgba(0, 0, 0, 0.1)", // Black grid lines for contrast
+                  color: "rgba(0, 0, 0, 0.1)",
                 },
                 ticks: {
                   font: {
                     size: window.innerWidth < 640 ? 9 : 11,
                   },
-                  color: "#1f2937", // Dark gray ticks for contrast
+                  color: "#1f2937",
                 },
+                beginAtZero: true,
               },
             }
           : undefined,
@@ -174,20 +277,154 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
         return <Line data={reportData} options={chartOptions} />;
       case "pie":
         return <Pie data={reportData} options={chartOptions} />;
+      case "multi-bar":
+      case "comparison-chart":
+        // Enhanced options for multi-dimensional charts
+        const multiChartOptions = {
+          ...chartOptions,
+          plugins: {
+            ...chartOptions.plugins,
+            legend: {
+              ...chartOptions.plugins.legend,
+              display: true,
+              position: "top",
+              labels: {
+                ...chartOptions.plugins.legend.labels,
+                boxWidth: 12,
+                padding: 8,
+              },
+            },
+            tooltip: {
+              ...chartOptions.plugins.tooltip,
+              mode: 'index',
+              intersect: false,
+              callbacks: {
+                title: function(context) {
+                  return `Category: ${context[0].label}`;
+                },
+                label: function(context) {
+                  return `${context.dataset.label}: ${context.parsed.y}`;
+                }
+              }
+            },
+          },
+          interaction: {
+            mode: 'nearest',
+            axis: 'x',
+            intersect: false
+          }
+        };
+        return <Bar data={reportData} options={multiChartOptions} />;
       default:
         return (
           <div className="text-center py-8 text-slate-500 dark:text-slate-400">
-            <p className="text-sm md:text-base">Invalid visualization type</p>
+            <div className="max-w-md mx-auto p-4">
+              <p className="text-sm md:text-base font-medium mb-2">Invalid visualization type</p>
+              <p className="text-xs md:text-sm mb-4">
+                The selected chart type '{visualization.type}' is not supported
+              </p>
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+                <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                  Try selecting a different chart type: Bar Chart, Line Chart, Pie Chart, Multi-Series Bar, Cross-Table Compare, or Table
+                </p>
+              </div>
+            </div>
           </div>
         );
     }
   };
 
   const renderTable = () => {
+    // Handle grouped table rendering
+    if (reportData && reportData.type === 'grouped-table' && reportData.groups) {
+      return (
+        <div className="overflow-x-auto max-h-[60vh] sm:max-h-[70vh] lg:max-h-96 scrollbar-thin">
+          <div className="space-y-6">
+            {Object.entries(reportData.groups).map(([groupName, groupRows]) => (
+              <div key={groupName} className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+                <div className="bg-slate-100 dark:bg-slate-800 px-4 py-2 border-b border-slate-200 dark:border-slate-700">
+                  <h4 className="font-medium text-slate-900 dark:text-slate-100">
+                    {reportData.groupBy}: {groupName} ({groupRows.length} records)
+                  </h4>
+                </div>
+                <table className="w-full text-xs sm:text-sm border-collapse">
+                  <thead className="bg-slate-50 dark:bg-slate-800">
+                    <tr>
+                      {reportData.columns.map((column, index) => (
+                        <th
+                          key={index}
+                          className="px-4 py-3 text-left font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-600 whitespace-nowrap"
+                        >
+                          {column}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupRows.map((row, rowIndex) => (
+                      <tr
+                        key={rowIndex}
+                        className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+                      >
+                        {reportData.columns.map((column, colIndex) => (
+                          <td
+                            key={colIndex}
+                            className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100 whitespace-nowrap"
+                          >
+                            {row[column] !== undefined ? String(row[column]) : "-"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // Handle regular table rendering
     if (!reportData || !reportData.rows || !reportData.columns) {
       return (
         <div className="text-center py-8 text-slate-500 dark:text-slate-400">
-          <p className="text-sm md:text-base">No table data available</p>
+          <div className="max-w-md mx-auto p-4">
+            <p className="text-sm md:text-base font-medium mb-2">No table data available</p>
+            <p className="text-xs md:text-sm mb-4">
+              Generate a report to populate the table with data
+            </p>
+            
+            <div className="space-y-3">
+              {/* Performance Analysis for Tables */}
+              {performanceAnalysis && (
+                <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg p-3 text-left">
+                  <h4 className="text-sm font-medium text-indigo-900 dark:text-indigo-100 mb-2">
+                    Table Performance
+                  </h4>
+                  <div className="text-xs text-indigo-700 dark:text-indigo-300">
+                    <p>Query complexity: <span className="font-medium">{performanceAnalysis.complexity}</span></p>
+                  </div>
+                </div>
+              )}
+
+              {validationSuggestions.length > 0 && (
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-left">
+                  <h4 className="text-sm font-medium text-blue-900 dark:text-blue-100 mb-2">
+                    Tips for better tables:
+                  </h4>
+                  <ul className="space-y-1">
+                    {validationSuggestions.slice(0, 2).map((suggestion, index) => (
+                      <li key={index} className="text-xs text-blue-700 dark:text-blue-300 flex items-start space-x-1">
+                        <span className="text-blue-500 mt-0.5">•</span>
+                        <span>{suggestion.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       );
     }

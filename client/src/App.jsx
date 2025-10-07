@@ -33,10 +33,15 @@ function App() {
     filters: {}
   })
   const [reportData, setReportData] = useState(null)
+  const [reportMeta, setReportMeta] = useState(null)
   const [visualization, setVisualization] = useState({
     type: 'table',
     xAxis: '',
-    yAxis: ''
+    yAxis: '',
+    groupBy: '',
+    categoryField: '',
+    valueFields: [],
+    seriesField: ''
   })
   const [loading, setLoading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -98,17 +103,23 @@ function App() {
   }
 
   const handleFieldSelect = (field, collectionName) => {
+    console.log('handleFieldSelect called:', field, collectionName);
     const fieldWithCollection = {
       ...field,
       collection: collectionName,
       id: `${collectionName}.${field.name}`
     }
     
+    console.log('Field with collection:', fieldWithCollection);
+    
     setSelectedFields(prev => {
       const exists = prev.find(f => f.id === fieldWithCollection.id)
+      console.log('Field exists:', exists);
       if (exists) {
+        console.log('Removing field');
         return prev.filter(f => f.id !== fieldWithCollection.id)
       }
+      console.log('Adding field');
       return [...prev, fieldWithCollection]
     })
   }
@@ -123,6 +134,10 @@ function App() {
 
   const handleReportData = (data) => {
     setReportData(data)
+  }
+
+  const handleReportMeta = (meta) => {
+    setReportMeta(meta)
   }
 
   if (loading && collections.length === 0) {
@@ -210,6 +225,7 @@ function App() {
               onDataModelChange={handleDataModelChange}
               onVisualizationChange={handleVisualizationChange}
               onReportData={handleReportData}
+              onReportMeta={handleReportMeta}
             />
           </motion.div>
 
@@ -222,6 +238,7 @@ function App() {
               reportData={reportData}
               visualization={visualization}
               dataModel={dataModel}
+              metadata={reportMeta}
             />
           </motion.div>
         </div>
