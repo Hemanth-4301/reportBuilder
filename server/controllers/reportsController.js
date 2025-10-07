@@ -273,6 +273,41 @@ const generateReport = (models) => async (req, res, next) => {
         fields: fields,
         totalRecords: data.length
       };
+    } else if (visualization.type === 'grouped-table') {
+      // Build grouped-table envelope that PreviewPane expects (Canvas will extract data.data)
+      const groupBy = visualization.groupBy || visualization.xAxis || (fields && fields[0]);
+      // If previous logic formatted data as chart envelope (labels/datasets), try to recover raw rows
+      let rows = [];
+      if (Array.isArray(data)) {
+        rows = data;
+      } else if (data && Array.isArray(data.data)) {
+        // data.data could be chart envelope; if so, there's no raw rows. Prefer the originally queried rows
+        rows = data.data;
+      } else if (Array.isArray(data)) {
+        rows = data;
+      } else {
+        rows = Array.isArray(data) ? data : [];
+      }
+      const columns = rows.length ? Object.keys(rows[0]).filter(k => k !== '_sourceTable') : (fields || []);
+      const groups = {};
+      rows.forEach((row) => {
+        const key = row && row[groupBy] !== undefined && row[groupBy] !== null ? String(row[groupBy]) : 'Unspecified';
+        groups[key] = groups[key] || [];
+        groups[key].push(row);
+      });
+
+      const payload = {
+        type: 'grouped-table',
+        groupBy,
+        columns,
+        groups
+      };
+
+      reportData = {
+        type: 'grouped-table',
+        data: payload,
+        totalRecords: rows.length
+      };
     } else if (visualization.type === 'multi-bar' && selectedCollections.length > 1) {
       // Multi-bar across tables: build common labels (unique x values) and align datasets
       const groupedByTable = {};

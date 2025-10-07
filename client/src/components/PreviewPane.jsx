@@ -92,6 +92,55 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
     }
   }, [reportData, dataModel, visualization.type]);
 
+  // Detect dark mode to adjust chart colors for visibility
+  const isDarkMode = typeof window !== 'undefined' && (
+    document.documentElement.classList.contains('dark') || document.body.classList.contains('dark')
+  );
+  const adaptiveTextColor = isDarkMode ? '#e6eef8' : '#1f2937';
+  const containerBackground = (() => {
+    if (visualization?.type === 'table' || visualization?.type === 'grouped-table') {
+      return isDarkMode ? '#0b1220' : '#ffffff';
+    }
+    return isDarkMode ? '#071026' : '#e5e7eb';
+  })();
+
+  // Color palettes tuned for dark & light backgrounds (high contrast)
+  const lightPalette = [
+    'rgba(54, 162, 235, 0.85)', // blue
+    'rgba(255, 99, 132, 0.85)', // red
+    'rgba(255, 159, 64, 0.85)', // orange
+    'rgba(75, 192, 192, 0.85)', // teal
+    'rgba(153, 102, 255, 0.85)', // purple
+    'rgba(201, 203, 207, 0.85)' // gray
+  ];
+
+  const darkPalette = [
+    '#60a5fa', // sky-400
+    '#fb7185', // rose-400
+    '#fb923c', // orange-400
+    '#34d399', // green-400
+    '#a78bfa', // violet-400
+    '#94a3b8'  // slate-400
+  ];
+
+  const lightBorder = [
+    'rgba(54, 162, 235, 1)',
+    'rgba(255, 99, 132, 1)',
+    'rgba(255, 159, 64, 1)',
+    'rgba(75, 192, 192, 1)',
+    'rgba(153, 102, 255, 1)',
+    'rgba(201, 203, 207, 1)'
+  ];
+
+  const darkBorder = [
+    '#1e40af',
+    '#7f1d1d',
+    '#9a3412',
+    '#065f46',
+    '#5b21b6',
+    '#334155'
+  ];
+
   const handleExport = async (format) => {
     if (!reportData) {
       toast.error("No data to export");
@@ -134,13 +183,9 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
   };
 
   const renderChart = () => {
-    // Check for table visualization first
-    if (
-      (visualization.type === "table" || visualization.type === "grouped-table") &&
-      reportData &&
-      (reportData.rows || reportData.groups) &&
-      reportData.columns
-    ) {
+    // Route table visualizations to the table renderer; renderTable will
+    // normalize payload shapes (array-of-objects or envelope { data: [...] })
+    if (visualization.type === "table" || visualization.type === "grouped-table") {
       return renderTable();
     }
 
@@ -225,6 +270,7 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
           position: "top",
           labels: {
             usePointStyle: true,
+            color: adaptiveTextColor,
             font: {
               size: window.innerWidth < 640 ? 10 : 12,
             },
@@ -249,7 +295,7 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
                   font: {
                     size: window.innerWidth < 640 ? 9 : 11,
                   },
-                  color: "#1f2937",
+                  color: adaptiveTextColor,
                   maxRotation: 45,
                 },
               },
@@ -261,7 +307,7 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
                   font: {
                     size: window.innerWidth < 640 ? 9 : 11,
                   },
-                  color: "#1f2937",
+                  color: adaptiveTextColor,
                 },
                 beginAtZero: true,
               },
@@ -270,13 +316,41 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
       backgroundColor: "#e5e7eb", // Set gray background for charts
     };
 
+    // Prepare a safe chart data object that guarantees visible colors/contrast in dark mode
+    const prepareChartData = (rd) => {
+      if (!rd) return rd;
+      let clone;
+      try {
+        clone = JSON.parse(JSON.stringify(rd));
+      } catch (e) {
+        clone = { ...rd };
+      }
+      if (clone.datasets && Array.isArray(clone.datasets)) {
+        clone.datasets = clone.datasets.map((ds, i) => {
+          const idx = i % (isDarkMode ? darkPalette.length : lightPalette.length);
+          const bg = ds.backgroundColor || (isDarkMode ? darkPalette[idx] : lightPalette[idx]);
+          const border = ds.borderColor || (isDarkMode ? darkBorder[idx] : lightBorder[idx]);
+          return {
+            ...ds,
+            backgroundColor: bg,
+            borderColor: border,
+            borderWidth: ds.borderWidth ?? 1,
+          };
+        });
+      }
+      return clone;
+    };
+
+    const chartPayload = reportData?.data ? reportData.data : reportData;
+    const chartData = prepareChartData(chartPayload);
+
     switch (visualization.type) {
       case "bar":
-        return <Bar data={reportData} options={chartOptions} />;
+        return <Bar data={chartData} options={chartOptions} />;
       case "line":
-        return <Line data={reportData} options={chartOptions} />;
+        return <Line data={chartData} options={chartOptions} />;
       case "pie":
-        return <Pie data={reportData} options={chartOptions} />;
+        return <Pie data={chartData} options={chartOptions} />;
       case "multi-bar":
       case "comparison-chart":
         // Enhanced options for multi-dimensional charts
@@ -335,22 +409,41 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
   };
 
   const renderTable = () => {
+    // Normalize report payload into a consistent table shape: { rows: [...], columns: [...] }
+    const rd = (() => {
+      if (!reportData) return null;
+      // backend may return an envelope: { data: [...] , fields: [...] }
+      if (Array.isArray(reportData)) {
+        const rows = reportData;
+        const columns = rows.length ? Object.keys(rows[0]) : [];
+        return { rows, columns, type: 'table' };
+      }
+      if (Array.isArray(reportData.data)) {
+        const rows = reportData.data;
+        const columns = reportData.fields && reportData.fields.length ? reportData.fields : (rows.length ? Object.keys(rows[0]) : []);
+        return { rows, columns, type: reportData.type || 'table', groups: reportData.groups };
+      }
+      // Already normalized shape
+      if (reportData.rows || reportData.groups) return reportData;
+      return null;
+    })();
+
     // Handle grouped table rendering
-    if (reportData && reportData.type === 'grouped-table' && reportData.groups) {
+    if (rd && rd.type === 'grouped-table' && rd.groups) {
       return (
         <div className="overflow-x-auto max-h-[60vh] sm:max-h-[70vh] lg:max-h-96 scrollbar-thin">
           <div className="space-y-6">
-            {Object.entries(reportData.groups).map(([groupName, groupRows]) => (
+            {Object.entries(rd.groups).map(([groupName, groupRows]) => (
               <div key={groupName} className="border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
                 <div className="bg-slate-100 dark:bg-slate-800 px-4 py-2 border-b border-slate-200 dark:border-slate-700">
                   <h4 className="font-medium text-slate-900 dark:text-slate-100">
-                    {reportData.groupBy}: {groupName} ({groupRows.length} records)
+                    {rd.groupBy}: {groupName} ({groupRows.length} records)
                   </h4>
                 </div>
                 <table className="w-full text-xs sm:text-sm border-collapse">
                   <thead className="bg-slate-50 dark:bg-slate-800">
                     <tr>
-                      {reportData.columns.map((column, index) => (
+                      {rd.columns.map((column, index) => (
                         <th
                           key={index}
                           className="px-4 py-3 text-left font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-600 whitespace-nowrap"
@@ -366,7 +459,7 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
                         key={rowIndex}
                         className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
                       >
-                        {reportData.columns.map((column, colIndex) => (
+                        {rd.columns.map((column, colIndex) => (
                           <td
                             key={colIndex}
                             className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100 whitespace-nowrap"
@@ -386,7 +479,7 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
     }
 
     // Handle regular table rendering
-    if (!reportData || !reportData.rows || !reportData.columns) {
+    if (!rd || (!rd.rows || !rd.columns)) {
       return (
         <div className="text-center py-8 text-slate-500 dark:text-slate-400">
           <div className="max-w-md mx-auto p-4">
@@ -440,7 +533,7 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
         >
           <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0 z-10">
             <tr>
-              {reportData.columns.map((column, index) => (
+              {rd.columns.map((column, index) => (
                 <th
                   key={index}
                   className="px-4 py-3 text-left font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-600 whitespace-nowrap"
@@ -452,12 +545,12 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
             </tr>
           </thead>
           <tbody>
-            {reportData.rows.map((row, rowIndex) => (
+            {rd.rows.map((row, rowIndex) => (
               <tr
                 key={rowIndex}
                 className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
               >
-                {reportData.columns.map((column, colIndex) => (
+                {rd.columns.map((column, colIndex) => (
                   <td
                     key={colIndex}
                     className="px-4 py-3 border-b border-slate-100 dark:border-slate-700 text-slate-900 dark:text-slate-100 whitespace-nowrap"
@@ -537,8 +630,8 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
                 style={{
                   position: "relative",
                   overflow: "visible",
-                  backgroundColor:
-                    visualization.type === "table" ? "#ffffff" : "#e5e7eb",
+                  backgroundColor: containerBackground,
+                  color: adaptiveTextColor
                 }}
               >
                 {renderChart()}
@@ -548,9 +641,21 @@ const PreviewPane = ({ reportData, visualization, dataModel }) => {
               <div className="p-3 sm:p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
                   <div className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
-                    {reportData.rows
-                      ? `${reportData.rows.length} records`
-                      : "Chart visualization"}
+                    {(() => {
+                      // Count rows from normalized payload if available
+                      try {
+                        const norm = Array.isArray(reportData)
+                          ? { rows: reportData }
+                          : reportData.data && Array.isArray(reportData.data)
+                          ? { rows: reportData.data }
+                          : reportData.rows
+                          ? { rows: reportData.rows }
+                          : null;
+                        return norm && norm.rows ? `${norm.rows.length} records` : "Chart visualization";
+                      } catch (e) {
+                        return "Chart visualization";
+                      }
+                    })()}
                   </div>
                   <div className="flex items-center space-x-1 sm:space-x-2 flex-wrap gap-2">
                     <button

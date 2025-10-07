@@ -373,13 +373,54 @@ const generateReport = (models) => async (req, res, next) => {
 
     // Format data for visualization based on visualization type
     const totalExecutionTime = Date.now() - startTime;
-    
+
+    // Prepare outgoing data in a shape PreviewPane expects.
+    // For grouped-table, build an envelope with { type: 'grouped-table', groupBy, columns, groups }
+    let outgoingData = null;
+
+    try {
+      if (visualization && visualization.type === 'grouped-table') {
+        // Determine groupBy field preference
+        const groupBy = visualization.groupBy || visualization.xAxis || (fields && fields[0]);
+
+        // Normalize rows
+        const rows = Array.isArray(data) ? data : (data && data.data) || [];
+
+        // Build columns from first row keys (exclude internal _sourceTable if present at consumer's choice)
+        const columns = rows.length ? Object.keys(rows[0]).filter(k => k !== '_sourceTable') : (fields || []);
+
+        // Group rows by groupBy value
+        const groups = {};
+        rows.forEach((row) => {
+          const key = row && row[groupBy] !== undefined && row[groupBy] !== null ? String(row[groupBy]) : 'Unspecified';
+          groups[key] = groups[key] || [];
+          groups[key].push(row);
+        });
+
+        const payload = {
+          type: 'grouped-table',
+          groupBy,
+          columns,
+          groups
+        };
+
+        // Wrap as data.data so Canvas.jsx will extract the inner payload and pass to PreviewPane
+        outgoingData = { data: payload };
+      } else {
+        // Default: return raw data as before. Preserve existing behavior so other visualizations are unaffected.
+        outgoingData = Array.isArray(data) ? data : (data || []);
+      }
+    } catch (formatError) {
+      console.error('Error formatting grouped-table payload:', formatError.message);
+      outgoingData = Array.isArray(data) ? data : (data || []);
+    }
+
     // Return successful response
     res.json({
       success: true,
-      data: data || [],
+      data: outgoingData,
       metadata: {
-        totalRecords: data?.length || 0,
+        totalRecords: Array.isArray(data) ? data.length : (data && data.length) || 0,
         collections: selectedCollections,
         fields: fields,
         visualizationType: visualization.type,
